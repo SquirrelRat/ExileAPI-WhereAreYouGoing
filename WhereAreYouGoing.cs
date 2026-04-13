@@ -45,6 +45,9 @@ public class WhereAreYouGoing : BaseSettingsPlugin<WhereAreYouGoingSettings>
     private int _selectedCustomIndex;
     private int _selectedTab;
 
+    private static readonly Dictionary<string, string> SliderEditBuffers = new();
+    private static string _activeSliderEditId = null;
+
     private Camera Camera => GameController.Game.IngameState.Camera;
     private Map MapWindow => GameController.Game.IngameState.IngameUi.Map;
 
@@ -748,9 +751,19 @@ public class WhereAreYouGoing : BaseSettingsPlugin<WhereAreYouGoingSettings>
 
     private bool ModernSlider(string id, ref int value, int min, int max)
     {
-        float floatValue = value;
-        if (!ModernSliderFloat(id, ref floatValue, min, max))
+        if (_activeSliderEditId == id)
         {
+            return HandleSliderTextInput(id, ref value, min, max);
+        }
+
+        float floatValue = value;
+        if (!ModernSliderFloat(id, ref floatValue, min, max, out var valueClicked))
+        {
+            if (valueClicked)
+            {
+                _activeSliderEditId = id;
+                SliderEditBuffers[id] = value.ToString();
+            }
             return false;
         }
 
@@ -758,13 +771,44 @@ public class WhereAreYouGoing : BaseSettingsPlugin<WhereAreYouGoingSettings>
         return true;
     }
 
+    private static bool HandleSliderTextInput(string id, ref int value, int min, int max)
+    {
+        if (!SliderEditBuffers.TryGetValue(id, out var buffer))
+        {
+            buffer = value.ToString();
+            SliderEditBuffers[id] = buffer;
+        }
+
+        ImGui.SetKeyboardFocusHere();
+        if (ImGui.InputText($"##{id}_edit", ref buffer, 10, ImGuiInputTextFlags.EnterReturnsTrue | ImGuiInputTextFlags.AutoSelectAll))
+        {
+            if (int.TryParse(buffer, out var newValue))
+            {
+                value = Math.Clamp(newValue, min, max);
+            }
+            _activeSliderEditId = null;
+            SliderEditBuffers.Remove(id);
+            return true;
+        }
+
+        if (ImGui.IsMouseClicked(ImGuiMouseButton.Left) && !ImGui.IsItemHovered())
+        {
+            _activeSliderEditId = null;
+            SliderEditBuffers.Remove(id);
+        }
+
+        SliderEditBuffers[id] = buffer;
+        return false;
+    }
+
     private static uint PackColor(float red, float green, float blue, float alpha)
     {
         return (uint)(alpha * 255) << 24 | (uint)(blue * 255) << 16 | (uint)(green * 255) << 8 | (uint)(red * 255);
     }
 
-    private static bool ModernSliderFloat(string id, ref float value, float min, float max)
+    private static bool ModernSliderFloat(string id, ref float value, float min, float max, out bool valueClicked)
     {
+        valueClicked = false;
         var labelSize = ImGui.CalcTextSize(id);
         var valueText = ((int)value).ToString();
         var valueSize = ImGui.CalcTextSize(valueText);
@@ -779,12 +823,26 @@ public class WhereAreYouGoing : BaseSettingsPlugin<WhereAreYouGoingSettings>
         var lineLength = lineEndX - lineStartX;
         var lineY = cursor.Y + height * 0.5f;
 
+        var valueRectMin = valuePosition;
+        var valueRectMax = new Vector2(valuePosition.X + valueSize.X, valuePosition.Y + valueSize.Y);
+
+        if (ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+        {
+            var mousePos = ImGui.GetMousePos();
+            if (mousePos.X >= valueRectMin.X && mousePos.X <= valueRectMax.X &&
+                mousePos.Y >= valueRectMin.Y && mousePos.Y <= valueRectMax.Y)
+            {
+                valueClicked = true;
+            }
+        }
+
+        var sliderButtonWidth = lineLength + 20f;
         ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(0f, height + 2f));
         ImGui.PushStyleColor(ImGuiCol.Button, 0);
         ImGui.PushStyleColor(ImGuiCol.ButtonHovered, 0);
         ImGui.PushStyleColor(ImGuiCol.ButtonActive, 0);
         ImGui.PushStyleColor(ImGuiCol.Text, 0);
-        var clicked = ImGui.InvisibleButton($"##{id}", new Vector2(totalWidth, height));
+        var clicked = ImGui.InvisibleButton($"##{id}", new Vector2(sliderButtonWidth, height));
         ImGui.PopStyleColor(4);
         ImGui.PopStyleVar();
 
@@ -816,7 +874,7 @@ public class WhereAreYouGoing : BaseSettingsPlugin<WhereAreYouGoingSettings>
         drawList.AddCircleFilled(new Vector2(dotX, lineY), dotRadius - 2f, PackColor(0.02f, 0.08f, 0.15f, 1f));
         drawList.AddCircleFilled(new Vector2(dotX, lineY), dotRadius - 3.5f, dotColor);
 
-        if (isActive || (clicked && isHovered))
+        if (!valueClicked && (isActive || (clicked && isHovered)))
         {
             var mousePosition = ImGui.GetMousePos();
             var newNormalized = Math.Clamp((mousePosition.X - lineStartX) / lineLength, 0f, 1f);
